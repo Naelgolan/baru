@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
-  ShieldCheck, Users, MessageSquare, Trash2, Loader2, RefreshCw,
+  ShieldCheck, ShieldPlus, ShieldMinus, Users, MessageSquare, Trash2, Loader2, RefreshCw,
   TrendingUp, BarChart2, Activity, UserPlus
 } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
@@ -11,10 +11,9 @@ import {
 } from 'recharts';
 
 const MOOD_COLORS = { happy: '#10b981', neutral: '#f59e0b', sad: '#f43f5e' };
-const PIE_COLORS  = ['#10b981', '#f59e0b', '#f43f5e'];
 const MOOD_LABELS = { happy: 'Senang', neutral: 'Biasa', sad: 'Sedih/Lelah' };
 
-const CustomTooltip = ({ active, payload, label }) => {
+const MoodLineTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
     <div className="glass-card px-4 py-3 text-sm" style={{ border: '1px solid var(--border)' }}>
@@ -28,21 +27,33 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
+const chartTooltipProps = {
+  contentStyle: {
+    background: 'var(--bg-overlay)',
+    border: '1px solid var(--border)',
+    borderRadius: '12px',
+    fontSize: '12px',
+  },
+  labelStyle: { color: 'var(--t-primary)', fontWeight: 600 },
+};
+
 export default function AdminDashboard() {
-  const { token, user } = useAuth();
+  const { token, user, logout } = useAuth();
   const [stats, setStats]       = useState({ users: 0, posts: 0 });
   const [posts, setPosts]       = useState([]);
   const [users, setUsers]       = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
+  const [promotingUserId, setPromotingUserId] = useState(null);
+  const [demotingUserId, setDemotingUserId] = useState(null);
   const API_URL = 'http://localhost:5000/api';
 
-  useEffect(() => {
-    if (user && user.role === 'admin') fetchData();
-  }, [user]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    if (!token) return;
     setIsLoading(true);
+    setFetchError(null);
     try {
       const headers = { Authorization: `Bearer ${token}` };
       const [statsRes, postsRes, usersRes, analyticsRes] = await Promise.all([
@@ -51,22 +62,47 @@ export default function AdminDashboard() {
         fetch(`${API_URL}/admin/users`, { headers }),
         fetch(`${API_URL}/admin/analytics`, { headers }),
       ]);
-      if (statsRes.ok)     setStats(await statsRes.json());
-      if (postsRes.ok)     setPosts(await postsRes.json());
-      if (usersRes.ok)     setUsers(await usersRes.json());
+      const failures = [];
+      if (statsRes.ok) setStats(await statsRes.json());
+      else failures.push('statistik');
+      if (postsRes.ok) setPosts(await postsRes.json());
+      else failures.push('postingan');
+      if (usersRes.ok) setUsers(await usersRes.json());
+      else failures.push('pengguna');
       if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
+      else failures.push('analitik');
+
+      if (failures.length) {
+        setFetchError(`Gagal memuat: ${failures.join(', ')}. Periksa backend atau token.`);
+      }
+      setLastUpdated(new Date());
     } catch (e) {
       console.error(e);
+      setFetchError('Tidak bisa menghubungi server. Pastikan API berjalan di port 5000.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    if (user && user.role === 'admin') fetchData();
+  }, [user, fetchData]);
+
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return;
+    const intervalId = setInterval(fetchData, 90_000);
+    return () => clearInterval(intervalId);
+  }, [user, fetchData]);
 
   const handleDeletePost = async (id) => {
     if (!window.confirm('Yakin ingin menghapus postingan ini?')) return;
     try {
       const res = await fetch(`${API_URL}/admin/posts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
       if (res.ok) fetchData();
+      else {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error || 'Gagal menghapus postingan');
+      }
     } catch (e) { console.error(e); }
   };
 
@@ -79,25 +115,92 @@ export default function AdminDashboard() {
     } catch (e) { console.error(e); }
   };
 
+  const handleMakeAdmin = async (id, username) => {
+    if (!window.confirm(`Jadikan @${username} sebagai admin?\n\nUser tersebut bisa mengakses panel ini dan menghapus konten.`)) return;
+    setPromotingUserId(id);
+    try {
+      const res = await fetch(`${API_URL}/admin/make-admin/${encodeURIComponent(username)}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) fetchData();
+      else alert(body.error || 'Gagal menjadikan admin');
+    } catch (e) {
+      console.error(e);
+      alert('Tidak bisa menghubungi server.');
+    } finally {
+      setPromotingUserId(null);
+    }
+  };
+
+  const handleRemoveAdmin = async (id, username) => {
+    if (!window.confirm(`Cabut hak admin dari @${username}?\n\nAkun tetap ada — user tidak bisa lagi membuka panel Admin.`)) return;
+    setDemotingUserId(id);
+    try {
+      const res = await fetch(`${API_URL}/admin/remove-admin/${encodeURIComponent(username)}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (username === user.username) {
+          logout();
+        } else {
+          fetchData();
+        }
+      } else alert(body.error || 'Gagal mencabut admin');
+    } catch (e) {
+      console.error(e);
+      alert('Tidak bisa menghubungi server.');
+    } finally {
+      setDemotingUserId(null);
+    }
+  };
+
   if (!user || user.role !== 'admin') return <Navigate to="/" />;
 
   // Prepare pie data
   const pieData = analytics?.moodDistribution?.map(d => ({
     name: MOOD_LABELS[d.mood_type] || d.mood_type,
-    value: parseInt(d.count),
+    value: parseInt(d.count, 10),
     color: MOOD_COLORS[d.mood_type] || '#888',
   })) || [];
 
-  // Format dates short
+  const normalizeDateValue = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string' && value.length === 10 && !value.includes('T')) {
+      return value;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const formatDate = (d) => {
-    if (!d) return '';
-    const parts = d.split('-');
+    const normalized = normalizeDateValue(d);
+    if (!normalized) return '';
+    const parts = normalized.split('-');
     return `${parts[2]}/${parts[1]}`;
   };
 
+  const todayKey = new Date().toLocaleDateString('en-CA');
   const moodTrend  = (analytics?.moodTrend  || []).map(r => ({ ...r, date: formatDate(r.date), happy: +r.happy, neutral: +r.neutral, sad: +r.sad }));
   const postsChart = (analytics?.postsPerDay || []).map(r => ({ date: formatDate(r.date), Postingan: +r.count }));
   const userChart  = (analytics?.userGrowth  || []).map(r => ({ date: formatDate(r.date), Pengguna: +r.count }));
+  const todayUsers = analytics?.userGrowth?.find(r => normalizeDateValue(r.date) === todayKey)?.count ?? 0;
+
+  const adminCount = users.filter(u => u.role === 'admin').length;
+  const currentUserId = user?.id != null ? Number(user.id) : null;
+
+  const canDeleteUser = (u) => {
+    if (currentUserId != null && Number(u.id) === currentUserId) return false;
+    if (u.role === 'admin' && adminCount <= 1) return false;
+    return true;
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
@@ -110,10 +213,22 @@ export default function AdminDashboard() {
             <span className="gradient-text" style={{ backgroundImage: 'linear-gradient(to right, #f43f5e, #fb923c)' }}>Admin Panel</span>
           </h1>
           <p className="text-sm mt-1" style={{ color: 'var(--t-secondary)' }}>Moderasi komunitas & analitik kesehatan mental mahasiswa.</p>
+          {fetchError && (
+            <p className="text-xs mt-2 text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 max-w-xl">
+              {fetchError}
+            </p>
+          )}
         </div>
-        <button onClick={fetchData} className="btn-ghost p-2 rounded-xl" title="Refresh Data">
-          <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} style={{ color: 'var(--t-brand)' }} />
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={fetchData} className="btn-ghost p-2 rounded-xl" title="Refresh Data">
+            <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} style={{ color: 'var(--t-brand)' }} />
+          </button>
+          {lastUpdated && (
+            <span className="text-xs text-slate-300" style={{ color: 'var(--t-muted)' }}>
+              Terakhir update: {new Date(lastUpdated).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -121,8 +236,8 @@ export default function AdminDashboard() {
         {[
           { label: 'Total Pengguna',   value: stats.users,       icon: <Users className="w-6 h-6 text-emerald-500" />,  bg: 'bg-emerald-500/10' },
           { label: 'Total Postingan',  value: stats.posts,       icon: <MessageSquare className="w-6 h-6 text-blue-500" />, bg: 'bg-blue-500/10' },
-          { label: 'Data Mood Masuk',  value: analytics?.moodDistribution?.reduce((a,r) => a + parseInt(r.count), 0) ?? '—', icon: <Activity className="w-6 h-6 text-amber-500" />, bg: 'bg-amber-500/10' },
-          { label: 'Daftar Hari Ini',  value: analytics?.userGrowth?.find(r => r.date === formatDate(new Date().toISOString().slice(0,10)))?.Pengguna ?? 0, icon: <UserPlus className="w-6 h-6 text-rose-500" />, bg: 'bg-rose-500/10' },
+          { label: 'Data Mood Masuk',  value: analytics?.moodDistribution?.reduce((a,r) => a + parseInt(r.count, 10), 0) ?? '—', icon: <Activity className="w-6 h-6 text-amber-500" />, bg: 'bg-amber-500/10' },
+          { label: 'Daftar Hari Ini',  value: todayUsers, icon: <UserPlus className="w-6 h-6 text-rose-500" />, bg: 'bg-rose-500/10' },
         ].map((s, i) => (
           <div key={i} className="glass-card p-5 flex items-center gap-4">
             <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${s.bg}`}>{s.icon}</div>
@@ -141,7 +256,7 @@ export default function AdminDashboard() {
         <div className="glass-card p-5">
           <div className="flex items-center gap-2 mb-4">
             <BarChart2 className="w-5 h-5 text-brand-400" style={{ color: 'var(--t-brand)' }} />
-            <h2 className="font-bold text-sm">Distribusi Mood Keseluruhan</h2>
+            <h2 className="font-bold text-sm">Distribusi Mood (seluruh data)</h2>
           </div>
           {isLoading ? (
             <div className="flex justify-center py-10"><Loader2 className="w-8 h-8 animate-spin text-rose-400" /></div>
@@ -172,23 +287,23 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        {/* Line Chart - Mood Trend 7 days */}
+        {/* Line Chart - Mood Trend 3 days */}
         <div className="glass-card p-5 md:col-span-2">
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp className="w-5 h-5" style={{ color: 'var(--t-brand)' }} />
-            <h2 className="font-bold text-sm">Tren Mood 7 Hari Terakhir</h2>
+            <h2 className="font-bold text-sm">Tren Mood 3 Hari Terakhir</h2>
           </div>
           {isLoading ? (
             <div className="flex justify-center py-10"><Loader2 className="w-8 h-8 animate-spin text-rose-400" /></div>
           ) : moodTrend.length === 0 ? (
-            <p className="text-center py-10 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada data mood 7 hari terakhir.</p>
+            <p className="text-center py-10 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada data mood 3 hari terakhir.</p>
           ) : (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={moodTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--t-muted)' }} />
                 <YAxis tick={{ fontSize: 11, fill: 'var(--t-muted)' }} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={<MoodLineTooltip />} />
                 <Legend formatter={v => MOOD_LABELS[v] || v} />
                 <Line type="monotone" dataKey="happy"   stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="neutral" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
@@ -206,19 +321,19 @@ export default function AdminDashboard() {
         <div className="glass-card p-5">
           <div className="flex items-center gap-2 mb-4">
             <MessageSquare className="w-5 h-5 text-blue-400" />
-            <h2 className="font-bold text-sm">Aktivitas Postingan (7 Hari)</h2>
+            <h2 className="font-bold text-sm">Aktivitas Postingan (3 Hari)</h2>
           </div>
           {isLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-rose-400" /></div>
           ) : postsChart.length === 0 ? (
-            <p className="text-center py-8 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada postingan 7 hari terakhir.</p>
+            <p className="text-center py-8 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada postingan 3 hari terakhir.</p>
           ) : (
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={postsChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--t-muted)' }} />
                 <YAxis tick={{ fontSize: 11, fill: 'var(--t-muted)' }} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip {...chartTooltipProps} formatter={(value, name) => [value, name]} />
                 <Bar dataKey="Postingan" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -229,19 +344,19 @@ export default function AdminDashboard() {
         <div className="glass-card p-5">
           <div className="flex items-center gap-2 mb-4">
             <UserPlus className="w-5 h-5 text-rose-400" />
-            <h2 className="font-bold text-sm">Pertumbuhan Pengguna (7 Hari)</h2>
+            <h2 className="font-bold text-sm">Pertumbuhan Pengguna (3 Hari)</h2>
           </div>
           {isLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-rose-400" /></div>
           ) : userChart.length === 0 ? (
-            <p className="text-center py-8 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada pendaftar 7 hari terakhir.</p>
+            <p className="text-center py-8 text-xs" style={{ color: 'var(--t-muted)' }}>Belum ada pendaftar 3 hari terakhir.</p>
           ) : (
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={userChart}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--t-muted)' }} />
                 <YAxis tick={{ fontSize: 11, fill: 'var(--t-muted)' }} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip {...chartTooltipProps} formatter={(value, name) => [value, name]} />
                 <Bar dataKey="Pengguna" fill="#10b981" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -281,13 +396,58 @@ export default function AdminDashboard() {
                     <td className="py-3 px-2 text-xs" style={{ color: 'var(--t-secondary)' }}>
                       {new Date(u.created_at).toLocaleDateString('id-ID')}
                     </td>
-                    <td className="py-3 px-2 text-center">
-                      <button onClick={() => handleDeleteUser(u.id, u.username)}
-                        className="text-rose-500 hover:bg-rose-500/10 p-1.5 rounded-lg transition-colors"
-                        disabled={u.role === 'admin'}
-                        style={{ opacity: u.role === 'admin' ? 0.3 : 1, cursor: u.role === 'admin' ? 'not-allowed' : 'pointer' }}>
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    <td className="py-3 px-2">
+                      <div className="flex items-center justify-center gap-1 flex-wrap">
+                        {u.role !== 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => handleMakeAdmin(u.id, u.username)}
+                            disabled={promotingUserId === u.id || demotingUserId === u.id}
+                            title="Jadikan admin"
+                            className="text-emerald-500 hover:bg-emerald-500/10 p-1.5 rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            {promotingUserId === u.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <ShieldPlus className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                        {u.role === 'admin' && adminCount >= 2 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAdmin(u.id, u.username)}
+                            disabled={demotingUserId === u.id || promotingUserId === u.id}
+                            title="Cabut hak admin (jadikan user biasa)"
+                            className="text-amber-500 hover:bg-amber-500/10 p-1.5 rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            {demotingUserId === u.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <ShieldMinus className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUser(u.id, u.username)}
+                          title={
+                            !canDeleteUser(u)
+                              ? currentUserId != null && Number(u.id) === currentUserId
+                                ? 'Tidak bisa menghapus akun sendiri'
+                                : 'Harus ada minimal satu admin'
+                              : 'Hapus pengguna'
+                          }
+                          className="text-rose-500 hover:bg-rose-500/10 p-1.5 rounded-lg transition-colors"
+                          disabled={!canDeleteUser(u)}
+                          style={{
+                            opacity: canDeleteUser(u) ? 1 : 0.35,
+                            cursor: canDeleteUser(u) ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
