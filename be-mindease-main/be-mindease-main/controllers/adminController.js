@@ -200,3 +200,80 @@ exports.removeAdmin = async (req, res) => {
     res.status(500).json({ error: 'Database error' });
   }
 };
+
+exports.getSettings = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM settings');
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.updateSetting = async (req, res) => {
+  const { setting_key, setting_value } = req.body;
+  if (!setting_key || !setting_value) return res.status(400).json({ error: 'Key and value required' });
+  try {
+    await pool.query(
+      'INSERT INTO settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2',
+      [setting_key, setting_value]
+    );
+    res.json({ message: 'Setting updated successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.getDoctorsAdmin = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM doctors ORDER BY id ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.addDoctor = async (req, res) => {
+  const { name, spec, exp, rating, reviews, available, tags } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO doctors (name, spec, exp, rating, reviews, available, tags) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [name, spec, exp, rating, reviews, available, tags]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.updateDoctor = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { name, spec, exp, rating, reviews, available, tags } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE doctors SET name = $1, spec = $2, exp = $3, rating = $4, reviews = $5, available = $6, tags = $7 WHERE id = $8 RETURNING *',
+      [name, spec, exp, rating, reviews, available, tags, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Doctor not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.deleteDoctor = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  try {
+    const result = await pool.query('DELETE FROM doctors WHERE id = $1 RETURNING id', [id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Doctor not found' });
+    res.json({ message: 'Doctor deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+};

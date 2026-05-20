@@ -12,4 +12,12 @@ router.delete('/users/:id', authenticateAdmin, adminController.deleteUser);
 router.put('/make-admin/:username', authenticateAdmin, adminController.makeAdmin);
 router.put('/remove-admin/:username', authenticateAdmin, adminController.removeAdmin);
 
+router.get('/settings', authenticateAdmin, adminController.getSettings);
+router.post('/settings', authenticateAdmin, adminController.updateSetting);
+
+router.get('/doctors', authenticateAdmin, adminController.getDoctorsAdmin);
+router.post('/doctors', authenticateAdmin, adminController.addDoctor);
+router.put('/doctors/:id', authenticateAdmin, adminController.updateDoctor);
+router.delete('/doctors/:id', authenticateAdmin, adminController.deleteDoctor);
+
 module.exports = router;

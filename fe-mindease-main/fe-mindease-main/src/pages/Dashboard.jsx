@@ -17,7 +17,16 @@ export default function Dashboard() {
   const [selectedSleep, setSelectedSleep] = useState(null);
   const [selectedBurden, setSelectedBurden] = useState(null);
   const { token, user } = useAuth();
+  const [settings, setSettings] = useState({});
   const API_URL = 'http://localhost:5000/api';
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${API_URL}/public/settings`);
+      if (res.ok) setSettings(await res.json());
+    } catch (e) { console.error(e); }
+  };
+  useEffect(() => { fetchSettings(); }, []);
 
   const fetchMoods = async () => {
     if (!token) return;
@@ -110,7 +119,7 @@ export default function Dashboard() {
           )}
         </h1>
         <p className="text-base md:text-lg max-w-md mx-auto" style={T.secondary}>
-          {user ? 'Bagaimana perasaanmu hari ini? Yuk ceritakan.' : 'Login untuk menyimpan riwayat mood dan catatanmu.'}
+          {user ? (settings.dashboard_greeting || 'Bagaimana perasaanmu hari ini? Yuk ceritakan.') : 'Login untuk menyimpan riwayat mood dan catatanmu.'}
         </p>
       </div>
 
