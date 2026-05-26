@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 const { pool } = require('./config/db');
-=======
-const { pool } = require('./be-mindease-main/be-mindease-main/config/db');
->>>>>>> bc70388cee57007f1030f13050bb696aaae72132
 const bcrypt = require('bcryptjs');
 
 async function createAdmin() {
