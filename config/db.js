@@ -52,17 +52,18 @@ const initDB = async () => {
       )
     `);
 
-    // Seed initial channels if table is empty
-    const seedCount = await pool.query('SELECT COUNT(*) FROM channels');
-    if (parseInt(seedCount.rows[0].count) === 0) {
+    // Seed initial channels if they don't exist
+    try {
       await pool.query(`
         INSERT INTO channels (slug, name, description) VALUES
         ('curhat-umum', '💬-curhat-umum', 'Saluran bebas untuk membagikan keluh kesah dan cerita apa saja.'),
         ('stres-kecemasan', '🧠-stres-kecemasan', 'Tempat berbagi cerita seputar stres, kepanikan, dan kecemasan Anda.'),
         ('insomnia-tidur', '🌙-insomnia-tidur', 'Mengalami masalah tidur? Yuk, saling bercerita dan berbagi tips di sini.'),
         ('pelukan-hangat', '🫂-pelukan-hangat', 'Bila sedang sedih atau terluka, dapatkan pelukan hangat dan simpati di sini.')
+        ON CONFLICT (slug) DO NOTHING
       `);
-      console.log('Seeded initial channels successfully');
+    } catch (e) {
+      console.error('Error seeding channels:', e);
     }
 
     await pool.query(`
@@ -118,7 +119,7 @@ const initDB = async () => {
     `);
 
     // Insert default doctors if table is empty
-    const doctorsCount = await pool.query('SELECT COUNT(*) FROM doctors');
+    const doctorsCount = await pool.query('SELECT COUNT(*) AS count FROM doctors');
     if (parseInt(doctorsCount.rows[0].count) === 0) {
       await pool.query(`
         INSERT INTO doctors (name, spec, exp, rating, reviews, available, tags) VALUES 
